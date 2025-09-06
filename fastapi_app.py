@@ -12,6 +12,18 @@ from agents import intake_graph, PatientIntake
 from api import get_routers
 from api.utils import patient_to_dict, dict_to_patient, get_ip_address
 from api.config import APP_TITLE
+import os
+import socket
+import uuid
+from typing import Any, Dict
+
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from agents import intake_graph, PatientIntake
+from api.state import SESSION_STORE            # <-- use shared state
+from api import get_routers                   # <-- safe now (see step 4)
 
 app = FastAPI(title=APP_TITLE)
 
@@ -81,7 +93,19 @@ async def stream(
     return {"message": message, "data": patient_to_dict(session.get("patient")), "next_step": session["next_step"]}
 
 
+# get_routers() returns a list of APIRouter objects (not tuples)
+for rtr in get_routers():
+    app.include_router(rtr)
+    app.include_router(rtr, prefix="/api")
 
+# (optional) route table log
+@app.on_event("startup")
+async def _log_routes():
+    print("\n=== ROUTES ===")
+    for route in app.router.routes:
+        methods = ",".join(sorted(route.methods or []))
+        print(f"{methods:10s} {route.path}")
+    print("==============\n")
 
 
 # Mount all other routers from api/

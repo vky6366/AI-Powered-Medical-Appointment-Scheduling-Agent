@@ -54,16 +54,6 @@ def iso_from_date_time(date_str: str, time_str: str) -> str:
 # -----------------------------
 # Left header: server health
 # -----------------------------
-with st.sidebar:
-    st.subheader("Server")
-    try:
-        h = call_api("/health").json()
-        st.success("API ✓")
-        st.caption(h)
-    except Exception as e:
-        st.error(f"API not reachable: {e}")
-    st.divider()
-    st.caption(f"Thread: {st.session_state['thread_id']}")
 
 # -----------------------------
 # Chat history
@@ -308,7 +298,7 @@ def show_slot_picker(p: Dict[str, Any]):
                                 "problem_description": payload.get("problem_description",""),
                             },
                         )
-                        msg = f"I’ve emailed your confirmation and the intake form to **{email}**."
+                        msg = f"Thank You!! I’ve emailed your confirmation and the intake form to **{email}**."
                         st.session_state["message_history"].append({"role": "assistant", "content": msg})
                         with st.chat_message("assistant"):
                             st.markdown(msg)
