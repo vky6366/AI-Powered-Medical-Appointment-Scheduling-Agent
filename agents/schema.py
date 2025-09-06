@@ -9,8 +9,8 @@ class PatientIntake(BaseModel):
     dob: Optional[str] = None
     age: Optional[int] = None
     doctor: Optional[str] = None
-    location: Optional[str] = None  # optional
-
+    location: Optional[str] = None  
+    
     # Complaint
     problem: Optional[str] = None
     problem_description: Optional[str] = None
