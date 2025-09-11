@@ -17,7 +17,6 @@ An intelligent, AI-powered agent designed to automate and optimize the schedulin
 - FastAPI (Backend API server)
 - Streamlit (Frontend UI)
 - Machine Learning / NLP models
-- Database: SQLite / PostgreSQL / MongoDB
 - Integration APIs: Calendar, SMS, Email
 
 ## Installation
