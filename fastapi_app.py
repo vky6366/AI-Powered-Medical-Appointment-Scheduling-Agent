@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from agents import intake_graph, PatientIntake
 from api import get_routers
 from api.utils import patient_to_dict, dict_to_patient, get_ip_address
-from api.config import APP_TITLE
+# from api.config import APP_TITLE
 import os
 import socket
 import uuid
@@ -25,7 +25,7 @@ from agents import intake_graph, PatientIntake
 from api.state import SESSION_STORE            # <-- use shared state
 from api import get_routers                   # <-- safe now (see step 4)
 
-app = FastAPI(title=APP_TITLE)
+app = FastAPI(title="Test API")
 
 # CORS
 app.add_middleware(
@@ -42,7 +42,7 @@ SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "app": APP_TITLE}
+    return {"ok": True, "app": "Test API"}
 
 
 @app.get("/stream")

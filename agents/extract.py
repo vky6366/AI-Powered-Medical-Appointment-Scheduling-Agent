@@ -1,13 +1,13 @@
 import re
 from typing import Any, Dict, Optional
 from .schema import IntakeState, PatientIntake
-from .config import LLM_MODEL
-from langchain.prompts import ChatPromptTemplate
+# from .config import LLM_MODEL
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
-DOB_RE = re.compile(r"\b(19|20)\d{2}-\d{2}-\d{2}\b")
+DOB_RE = re.compile(r"\b\d{2}-\d{2}-(19|20)\d{2}\b")
 NAME_RE = re.compile(r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{1,60})", re.I)
 DR_RE = re.compile(r"\bDr\.?\s+[A-Z][a-zA-Z.-]{1,40}\b")
 
@@ -167,22 +167,6 @@ def infer_inline_updates(user_text: str, context_step: Optional[str]) -> dict:
         # Don't set description here to avoid capturing greetings as description
         return d
 
-    # one generic insurance pass (no duplicates)
-    # after merging data into `patient`
-        if (patient.insurance_carrier or "").strip().lower() in {"self-pay", "self pay", "no", "none"}:
-            patient.insurance_carrier = "self-pay"
-            patient.insurance_member_id = ""
-            patient.insurance_group = ""
-
-            return d
-        parts = t.split()
-        if parts and parts[0].lower() == "yes":
-            parts = parts[1:]
-        if len(parts) >= 1: d["insurance_carrier"] = parts[0]
-        if len(parts) >= 2: d["insurance_member_id"] = parts[1]
-        if len(parts) >= 3: d["insurance_group"] = parts[2]
-        if any(k in d for k in ("insurance_carrier", "insurance_member_id", "insurance_group")):
-            return d
 
     # date outside ask_date → treat as DOB
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
@@ -195,11 +179,11 @@ extract_prompt = ChatPromptTemplate.from_messages(
         ("system", """Return ONLY JSON with keys:
 name, dob, doctor, location, problem, problem_description, email, phone,
 insurance_carrier, insurance_member_id, insurance_group.
-Use "" for missing. DOB must be YYYY-MM-DD. No extra keys, no prose."""),
+Use "" for missing. DOB must be DD-MM-YYYY. No extra keys, no prose."""),
         ("human", "User input:\n{input_text}"),
     ]
 )
-_llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
+_llm = ChatOpenAI(model="o4-mini-2025-04-16")
 extract_chain = extract_prompt | _llm | StrOutputParser()
 
 def node_extract(state: IntakeState) -> IntakeState:
