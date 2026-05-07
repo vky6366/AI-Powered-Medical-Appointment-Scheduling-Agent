@@ -6,9 +6,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
-EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+# EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 DOB_RE = re.compile(r"\b\d{2}-\d{2}-(19|20)\d{2}\b")
-NAME_RE = re.compile(r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{1,60})", re.I)
+# NAME_RE = re.compile(r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{1,60})", re.I)
 DR_RE = re.compile(r"\bDr\.?\s+[A-Z][a-zA-Z.-]{1,40}\b")
 
 def safe_json_loads(text: str) -> Dict[str, Any]:
@@ -62,14 +62,14 @@ def infer_inline_updates(user_text: str, context_step: Optional[str]) -> dict:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
             d["appointment_date"] = t; return d
 
-    if context_step == "ask_email":
-        m = EMAIL_RE.search(t)
-        if m: d["email"] = m.group(0); return d
+    # if context_step == "ask_email":
+    #     m = EMAIL_RE.search(t)
+    #     if m: d["email"] = m.group(0); return d
 
-    if context_step == "ask_phone":
-        digits = re.sub(r"[^\d+]", "", t)
-        if len(re.sub(r"\D", "", digits)) >= 10:
-            d["phone"] = digits; return d
+    # if context_step == "ask_phone":
+    #     digits = re.sub(r"[^\d+]", "", t)
+    #     if len(re.sub(r"\D", "", digits)) >= 10:
+    #         d["phone"] = digits; return d
 
     if context_step == "ask_insurance_carrier":
         # Negative → self-pay
@@ -124,18 +124,18 @@ def infer_inline_updates(user_text: str, context_step: Optional[str]) -> dict:
         return d
 
     # ---------- Context-agnostic fallbacks ----------
-    m = EMAIL_RE.search(t)
-    if m: d["email"] = m.group(0); return d
+    # m = EMAIL_RE.search(t)
+    # if m: d["email"] = m.group(0); return d
 
-    digits = re.sub(r"[^\d+]", "", t)
-    if len(re.sub(r"\D", "", digits)) >= 10:
-        d["phone"] = digits; return d
+    # digits = re.sub(r"[^\d+]", "", t)
+    # if len(re.sub(r"\D", "", digits)) >= 10:
+    #     d["phone"] = digits; return d
 
     m = DOB_RE.search(t)
     if m: d["dob"] = m.group(0); return d
 
-    m = NAME_RE.search(t)
-    if m: d["name"] = m.group(1).strip(); return d
+    # m = NAME_RE.search(t)
+    # if m: d["name"] = m.group(1).strip(); return d
 
     if low in {"any", "any doctor", "no", "none", "na"}:
         d["doctor"] = "any doctor"; return d
@@ -177,9 +177,8 @@ def infer_inline_updates(user_text: str, context_step: Optional[str]) -> dict:
 extract_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", """Return ONLY JSON with keys:
-name, dob, doctor, location, problem, problem_description, email, phone,
-insurance_carrier, insurance_member_id, insurance_group.
-Use "" for missing. DOB must be DD-MM-YYYY. No extra keys, no prose."""),
+dob, doctor, location, problem, problem_description,
+insurance_carrier, insurance_member_id, insurance_group."""),
         ("human", "User input:\n{input_text}"),
     ]
 )
