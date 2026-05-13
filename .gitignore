@@ -1,8 +1,13 @@
 .env*
-.venv/
+/.venv/
 .vscode
 __pycache__
 Data Science Intern - RagaAI.pdf
 New Patient Intake Form.pdf
 data/
 storage/
+frontend/
+.dockerignore
+docker-compose.yml
+Dockerfile
+agents/medical-appointment-85be7-firebase-adminsdk-fbsvc-e32efcc4d8.json

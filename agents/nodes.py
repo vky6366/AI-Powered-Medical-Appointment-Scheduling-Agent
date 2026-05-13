@@ -1,258 +1,569 @@
 # agents/nodes.py
+
 from __future__ import annotations
+from datetime import datetime
+
 from .schema import IntakeState, PatientIntake
-from .utils import assign_duration, fetch_patient_record
+from .scheduler import assign_duration
+from .models import DoctorAvailability
 
-def node_ensure_problem(state: IntakeState) -> IntakeState:
+
+# =========================================================
+# AWAIT SLOT SELECTION
+# =========================================================
+
+def node_await_slot_selection(
+    state: IntakeState,
+) -> IntakeState:
     """
-    Ensure we have a short problem label (e.g., 'fever') and then a brief description.
+    Shown when the graph is waiting for the user to pick a slot
+    (next_step == 'select_slot') but no selected_slot_id has arrived yet.
+
+    Does NOT re-fetch from DB — just re-prompts with the same message.
+    This prevents duplicate DB queries and protects against the extract
+    node misinterpreting the user's slot reply as patient data.
     """
-    p: PatientIntake = state["patient"]
 
-    # Ask for the main issue first
-    if not p.problem:
-        state["message"] = (
-            "I’m sorry you’re dealing with this — I’ll help you quickly.\n"
-            "In a few words, what’s the main issue (e.g., ‘allergies’, ‘tooth pain’, ‘fever’)?"
-        )
-        state["next_step"] = "ask_problem"
-        return state
-
-    # Then ask for a little more detail
-    if not p.problem_description:
-        state["message"] = (
-            "Thanks. Could you describe it a bit more?\n"
-            "How long, how severe (mild/moderate/severe), anything that makes it better/worse?"
-        )
-        state["next_step"] = "ask_problem_details"
-        return state
-
-    return state
-
-YES_WORDS = {"yes","y","yeah","yep","visited","i have","i've"}
-NO_WORDS  = {"no","n","new","first time","nope"}
-
-# agents/nodes.py  (only the node_ask_returning function)
-def node_ask_returning(state: IntakeState) -> IntakeState:
-    p: PatientIntake = state["patient"]
-    inline = dict(state.get("_inline", {}))
-
-    if p.returning_patient is None:
-        if "_yes_no" in inline:
-            p.returning_patient = bool(inline.pop("_yes_no"))
-            # assign duration now
-            from .utils import assign_duration
-            p.appointment_duration_min = assign_duration(p.returning_patient)
-            state["patient"] = p
-            state["_inline"] = inline
-        else:
-            state["message"] = "Have you visited us before? (yes/no)"
-            state["next_step"] = "ask_returning"
-            return state
-
-    # If returning, but we still lack minimal contact, we’ll fill later in finalize
-    return state
-
-
-def node_ensure_doctor(state: IntakeState) -> IntakeState:
-    p: PatientIntake = state["patient"]
-
-    if not p.doctor:
-        state["message"] = "Do you have a preferred doctor? If yes, share the name; else say 'any'."
-        state["next_step"] = "ask_doctor"
-        return state
-
-    # Always normalize and SAVE
-    doc = (p.doctor or "").strip().lower()
-    if doc in {"any", "any doctor", "no", "none", "na"}:
-        p.doctor = "any doctor"
-        state["patient"] = p
-
-    return state
-
-
-
-def node_ensure_date(state: IntakeState) -> IntakeState:
-    """
-    Ask for preferred appointment date. Flag next_step='ask_date' so the inline
-    parser maps YYYY-MM-DD to appointment_date (not DOB).
-    """
-    p: PatientIntake = state["patient"]
-
-    if not p.appointment_date:
-        who = "returning" if p.returning_patient else "new"
-        mins = p.appointment_duration_min or assign_duration(p.returning_patient)
-        p.appointment_duration_min = mins
-        state["patient"] = p
-        state["message"] = f"Okay. Your appointment will be {mins} minutes.\nWhich date works for you? (YYYY-MM-DD)"
-        state["next_step"] = "ask_date"
-        return state
-
-    return state
-
-
-def node_ensure_contact(state: IntakeState) -> IntakeState:
-    """
-    Collect contact only for new patients; for returning, only if missing.
-    """
-    p: PatientIntake = state["patient"]
-    if p.returning_patient:
-        if not p.email:
-            state["message"] = "To send your confirmation, what’s your email?"
-            state["next_step"] = "ask_email"
-            return state
-        if not p.phone:
-            state["message"] = "And your phone number for SMS reminders?"
-            state["next_step"] = "ask_phone"
-            return state
-        return state
-
-    # New patient
-    if not p.email:
-        state["message"] = "Share your email so I can send the confirmation & intake form."
-        state["next_step"] = "ask_email"
-        return state
-
-    if not p.phone:
-        state["message"] = "And your phone number for SMS reminders?"
-        state["next_step"] = "ask_phone"
-        return state
-
-    return state
-
-
-def node_ensure_insurance(state: IntakeState) -> IntakeState:
-    """
-    Ask insurance ONLY after the appointment is booked (better UX).
-    - We detect booking via state["booking_done"] (set by /appointments/book).
-    - If self-pay, we skip member/group.
-    """
-    p: PatientIntake = state["patient"]
-
-    # Not booked yet? Do nothing; keep the previous message from finalize.
-    if not state.get("booking_done"):
-        return state
-
-    # For returning patients we can skip by default (or still collect; keeping skip for simplicity)
-    if p.returning_patient:
-        return state
-
-    carrier = (p.insurance_carrier or "").strip().lower()
-
-    # Ask carrier (first time)
-    if not carrier:
-        state["message"] = "Before your visit, do you have insurance? If yes, please share your insurance carrier name."
-        state["next_step"] = "ask_insurance_carrier"
-        return state
-
-    # Self-pay short-circuit
-    if carrier in {"self-pay", "self pay", "no", "none"}:
-        p.insurance_carrier = "self-pay"
-        p.insurance_member_id = ""
-        p.insurance_group = ""
-        state["patient"] = p
-        # No new message; we're done
-        return state
-
-    # Need member/group
-    if not (p.insurance_member_id or "").strip():
-        state["message"] = "Please share your insurance member ID."
-        state["next_step"] = "ask_insurance_member_id"
-        return state
-
-    if not (p.insurance_group or "").strip():
-        state["message"] = "And the insurance group number?"
-        state["next_step"] = "ask_insurance_group"
-        return state
-
-    # All set; no additional message
-    return state
-
-
-def node_finalize(state: IntakeState) -> IntakeState:
-    p: PatientIntake = state["patient"]
-
-    # doctor guard
-    if not p.doctor:
-        state["message"] = "Do you have a preferred doctor? If yes, share the name; else say 'any'."
-        state["next_step"] = "ask_doctor"
-        return state
-    else:
-        if p.doctor.strip().lower() in {"any", "any doctor", "no", "none", "na"}:
-            p.doctor = "any doctor"
-            state["patient"] = p
-
-    # problem guards
-    if not p.problem:
-        state["message"] = (
-            "I’m sorry you’re dealing with this — I’ll help you quickly.\n"
-            "In a few words, what’s the main issue (e.g., ‘allergies’, ‘tooth pain’, ‘fever’)?"
-        )
-        state["next_step"] = "ask_problem"
-        return state
-    if not p.problem_description:
-        state["message"] = (
-            "Thanks. Could you describe it a bit more?\n"
-            "How long, how severe (mild/moderate/severe), anything that makes it better/worse?"
-        )
-        state["next_step"] = "ask_problem_details"
-        return state
-
-    # returning vs new (contact & insurance for new only)
-    if p.returning_patient is None:
-        state["message"] = "Have you visited us before? (yes/no)"
-        state["next_step"] = "ask_returning"
-        return state
-
-    if p.returning_patient:
-        if not p.email:
-            state["message"] = "To send your confirmation, what’s your email?"
-            state["next_step"] = "ask_email"
-            return state
-        if not p.phone:
-            state["message"] = "And your phone number for SMS reminders?"
-            state["next_step"] = "ask_phone"
-            return state
-    else:
-        # NEW patient: insurance guards must **skip** when self-pay
-        carrier = (p.insurance_carrier or "").strip().lower()
-        if not carrier:
-            state["message"] = "Do you have insurance? If yes, please share your insurance carrier name."
-            state["next_step"] = "ask_insurance_carrier"
-            return state
-        if carrier not in {"self-pay", "self pay", "no", "none"}:
-            if not (p.insurance_member_id or "").strip():
-                state["message"] = "Please share your insurance member ID."
-                state["next_step"] = "ask_insurance_member_id"
-                return state
-            if not (p.insurance_group or "").strip():
-                state["message"] = "And the insurance group number?"
-                state["next_step"] = "ask_insurance_group"
-                return state
-
-        # contact (also required)
-        if not p.email:
-            state["message"] = "Share your email so I can send the confirmation & intake form."
-            state["next_step"] = "ask_email"
-            return state
-        if not p.phone:
-            state["message"] = "And your phone number for SMS reminders?"
-            state["next_step"] = "ask_phone"
-            return state
-
-    # date guard
-    if not p.appointment_date:
-        mins = p.appointment_duration_min or assign_duration(p.returning_patient)
-        p.appointment_duration_min = mins
-        state["patient"] = p
-        state["message"] = f"Okay. Your appointment will be {mins} minutes.\nWhich date works for you? (YYYY-MM-DD)"
-        state["next_step"] = "ask_date"
-        return state
-
-    # ready → UI fetch slots
+    # Keep available_slots in state so the frontend can re-render them
+    # if needed (they were already sent in the previous response).
     state["message"] = (
-        f"Great. I’ll fetch available slots for {p.doctor or 'any doctor'} "
-        f"on {p.appointment_date}. Please pick one in the UI and I’ll confirm."
+        "Please select a slot from the list above "
+        "by tapping the one you want."
     )
-    state["next_step"] = "done"
+
+    state["next_step"] = "select_slot"
+
     return state
+
+# =========================================================
+# ENSURE PROBLEM
+# =========================================================
+
+def node_ensure_problem(
+    state: IntakeState
+) -> IntakeState:
+    """
+    Ensure:
+    - problem
+    - problem_description
+    """
+
+    p: PatientIntake = state["patient"]
+
+    # -----------------------------------------
+    # Main issue
+    # -----------------------------------------
+
+    if not p.problem:
+
+        state["message"] = (
+            "What seems to be the problem today?"
+        )
+
+        state["next_step"] = "ask_problem"
+
+        return state
+
+    # -----------------------------------------
+    # Problem description
+    # -----------------------------------------
+
+    if not p.problem_description:
+
+        state["message"] = (
+            "Could you describe the symptoms in a bit more detail?"
+        )
+
+        state["next_step"] = "ask_problem_details"
+
+        return state
+
+    return state
+
+
+# =========================================================
+# ENSURE RETURNING PATIENT
+# =========================================================
+
+def node_ensure_returning(
+    state: IntakeState
+) -> IntakeState:
+    """
+    Determine whether patient is returning.
+    """
+
+    p: PatientIntake = state["patient"]
+
+    if p.returning_patient is None:
+
+        state["message"] = (
+            "Have you visited us before? (yes/no)"
+        )
+
+        state["next_step"] = "ask_returning"
+
+        return state
+
+    # -----------------------------------------
+    # Assign appointment duration
+    # -----------------------------------------
+
+    p.appointment_duration_min = assign_duration(
+        p.returning_patient
+    )
+
+    state["patient"] = p
+
+    return state
+
+
+# =========================================================
+# ENSURE DOCTOR
+# =========================================================
+
+def node_ensure_doctor(
+    state: IntakeState
+) -> IntakeState:
+    """
+    Ask preferred doctor if missing.
+    """
+
+    p: PatientIntake = state["patient"]
+
+    if not p.doctor:
+
+        state["message"] = (
+            "Do you have a preferred doctor?"
+        )
+
+        state["next_step"] = "ask_doctor"
+
+        return state
+
+    return state
+
+
+# =========================================================
+# ENSURE DATE
+# =========================================================
+
+def node_ensure_date(
+    state: IntakeState
+) -> IntakeState:
+    """
+    Ensure appointment date exists.
+    """
+
+    p: PatientIntake = state["patient"]
+
+    if not p.appointment_date:
+
+        mins = (
+            p.appointment_duration_min
+            or assign_duration(
+                p.returning_patient
+            )
+        )
+
+        p.appointment_duration_min = mins
+
+        state["patient"] = p
+
+        state["message"] = (
+            f"Your appointment duration will be "
+            f"{mins} minutes.\n"
+            f"Which date works for you? "
+            f"(YYYY-MM-DD)"
+        )
+
+        state["next_step"] = "ask_date"
+
+        return state
+
+    return state
+
+
+# =========================================================
+# FETCH AVAILABLE SLOTS
+# =========================================================
+
+def node_fetch_slots(
+    state: IntakeState,
+) -> IntakeState:
+    """
+    Fetch available slots from DB.
+    """
+
+    from datetime import datetime
+
+    from .doctor_router import (
+        recommend_doctor,
+    )
+
+    from .db import SessionLocal
+
+    from .db_service import (
+        get_doctor_by_name,
+        get_available_slots,
+    )
+
+    db = SessionLocal()
+
+    p: PatientIntake = state["patient"]
+
+    # -------------------------------------------------
+    # Validate date
+    # -------------------------------------------------
+
+    if not p.appointment_date:
+
+        state["message"] = (
+            "Please provide an appointment date."
+        )
+
+        state["next_step"] = "ask_date"
+        db.close()
+
+        return state
+
+    # -------------------------------------------------
+    # Resolve doctor
+    # -------------------------------------------------
+
+    doctor = None
+
+    # User selected any doctor
+    if (
+        not p.doctor
+        or p.doctor.lower().strip()
+        in {"any", "any doctor"}
+    ):
+
+        doctor = recommend_doctor(
+            db=db,
+            problem=p.problem,
+            preferred_location=p.location,
+        )
+
+        if not doctor:
+
+            state["message"] = (
+                "Sorry, I couldn't find an "
+                "available doctor for your issue."
+            )
+
+            state["next_step"] = "done"
+            db.close()
+
+            return state
+
+        p.doctor = doctor.doctor_name
+
+    else:
+
+        doctor = get_doctor_by_name(
+            db,
+            p.doctor,
+        )
+
+        if not doctor:
+
+            state["message"] = (
+                f"Doctor '{p.doctor}' not found."
+            )
+
+            state["next_step"] = "ask_doctor"
+            db.close()
+
+            return state
+
+    # -------------------------------------------------
+    # Parse appointment date
+    # -------------------------------------------------
+
+    try:
+
+        appointment_date = datetime.strptime(
+            p.appointment_date,
+            "%Y-%m-%d"
+        ).date()
+
+    except Exception:
+
+        state["message"] = (
+            "Invalid date format. "
+            "Please use YYYY-MM-DD."
+        )
+
+        state["next_step"] = "ask_date"
+        db.close()
+
+        return state
+
+    # -------------------------------------------------
+    # Fetch available slots
+    # -------------------------------------------------
+
+    slots = get_available_slots(
+        db=db,
+        doctor_id=doctor.id,
+        available_date=appointment_date,
+    )
+
+    if not slots:
+
+        state["message"] = (
+            f"No available slots found for "
+            f"{doctor.doctor_name} on "
+            f"{p.appointment_date}."
+        )
+
+        state["next_step"] = "done"
+        db.close()
+
+        return state
+
+    # -------------------------------------------------
+    # Store slots in graph state
+    # -------------------------------------------------
+
+    state["available_slots"] = [
+        {
+            "slot_id": slot.id,
+            "start": str(slot.start_time),
+            "end": str(slot.end_time),
+        }
+        for slot in slots
+    ]
+
+    state["patient"] = p
+
+    # -------------------------------------------------
+    # Build response message
+    # -------------------------------------------------
+
+    slot_lines = []
+
+    for idx, slot in enumerate(
+        slots,
+        start=1,
+    ):
+
+        slot_lines.append(
+            f"{idx}. "
+            f"{slot.start_time} - "
+            f"{slot.end_time}"
+        )
+
+    state["message"] = (
+        f"Available slots for "
+        f"{doctor.doctor_name} "
+        f"on {p.appointment_date}:\n\n"
+        + "\n".join(slot_lines)
+        + "\n\nPlease choose a slot."
+    )
+
+    state["next_step"] = "select_slot"
+
+    db.close()
+    return state
+
+# =========================================================
+# BOOK APPOINTMENT
+# =========================================================
+
+def node_book_appointment(
+    state: IntakeState,
+) -> IntakeState:
+    """
+    Book selected appointment slot, then send a confirmation email
+    to the patient.  Email is best-effort — a failing SMTP server
+    does NOT roll back the booking.
+    """
+    from .db import SessionLocal
+    from .db_service import (
+        mark_slot_booked,
+        create_appointment,
+        get_doctor_by_name,
+        get_user_by_id,
+    )
+
+    db = SessionLocal()
+
+    p: PatientIntake = state["patient"]
+
+    selected_slot_id = state.get(
+        "selected_slot_id"
+    )
+    
+
+    user_id = state.get("user_id")
+
+    # TODO (production): wrap the slot check + mark_slot_booked inside a
+    # DB transaction with SELECT FOR UPDATE to prevent the race condition
+    # where two users book the same slot simultaneously.
+    # e.g.  db.query(DoctorAvailability).filter(...).with_for_update().first()
+
+    if not selected_slot_id:
+
+        state["message"] = (
+            "Please select a valid slot."
+        )
+
+        state["next_step"] = "select_slot"
+
+        return state
+
+    # -----------------------------------------------------
+    # Find slot
+    # -----------------------------------------------------
+
+    slot = (
+        db.query(DoctorAvailability)
+        .filter(
+            DoctorAvailability.id
+            == selected_slot_id
+        )
+        .first()
+    )
+
+    if not slot:
+
+        state["message"] = (
+            "Selected slot not found."
+        )
+
+        state["next_step"] = "fetch_slots"
+
+        return state
+
+    # -----------------------------------------------------
+    # Already booked
+    # -----------------------------------------------------
+
+    if slot.is_booked:
+
+        state["message"] = (
+            "Sorry, that slot was just booked. "
+            "Please choose another slot."
+        )
+
+        state["next_step"] = "fetch_slots"
+
+        return state
+
+    # -----------------------------------------------------
+    # Resolve doctor
+    # -----------------------------------------------------
+
+    doctor = get_doctor_by_name(
+        db,
+        p.doctor
+    )
+
+    if not doctor:
+
+        state["message"] = (
+            "Doctor not found."
+        )
+
+        state["next_step"] = "done"
+
+        return state
+
+    # -----------------------------------------------------
+    # Mark slot booked
+    # -----------------------------------------------------
+
+    mark_slot_booked(
+        db,
+        slot.id
+    )
+
+    # -----------------------------------------------------
+    # Create appointment
+    # -----------------------------------------------------
+
+    thread_id = state.get("thread_id")
+
+    appointment = create_appointment(
+        db=db,
+        user_id=user_id,
+        doctor_id=doctor.id,
+        appointment_date=slot.available_date,
+        appointment_start=slot.start_time,
+        appointment_end=slot.end_time,
+        appointment_duration_min=(
+            p.appointment_duration_min
+        ),
+        returning_patient=(
+            p.returning_patient
+        ),
+        problem=p.problem,
+        problem_description=(
+            p.problem_description
+        ),
+        status="confirmed",
+        thread_id=thread_id,
+    )
+
+    # -----------------------------------------------------
+    # Save appointment info into patient state
+    # -----------------------------------------------------
+
+    p.appointment_start = str(slot.start_time)
+    p.appointment_end   = str(slot.end_time)
+
+    state["appointment_id"] = appointment.id
+    state["patient"]        = p
+
+    # -----------------------------------------------------
+    # Send confirmation email  (best-effort, non-blocking)
+    # -----------------------------------------------------
+
+    try:
+        from api.services.notify import send_confirmation_email
+
+        user = get_user_by_id(db, user_id)
+
+        if user and user.email:
+            send_confirmation_email(
+                to=user.email,
+                data={
+                    "name":                   user.name or "Patient",
+                    "email":                  user.email,
+                    "doctor":                 doctor.doctor_name,
+                    "appointment_date":       str(slot.available_date),
+                    "appointment_start":      str(slot.start_time),
+                    "appointment_end":        str(slot.end_time),
+                    "appointment_duration_min": p.appointment_duration_min,
+                    "problem":                p.problem or "",
+                    "booking_id":             str(appointment.booking_uuid),
+                },
+            )
+
+    except Exception:
+        # Never let email failure break the booking confirmation
+        import logging
+        logging.getLogger("medical_api").exception(
+            "node_book_appointment: email send failed for user_id=%s",
+            user_id,
+        )
+
+    # -----------------------------------------------------
+    # Confirmation message
+    # -----------------------------------------------------
+
+    state["message"] = (
+        f"Your appointment has been confirmed! "
+        f"A confirmation email has been sent to you.\n\n"
+        f"Doctor: {doctor.doctor_name}\n"
+        f"Date:   {slot.available_date}\n"
+        f"Time:   {slot.start_time} – {slot.end_time}\n"
+        f"Reason: {p.problem}"
+    )
+
+    state["next_step"] = "done"
+    db.close()
+    return state
+

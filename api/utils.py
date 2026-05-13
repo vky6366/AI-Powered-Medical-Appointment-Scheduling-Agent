@@ -3,6 +3,10 @@ import socket
 from typing import Any, Dict
 from agents import PatientIntake
 
+# Import the canonical SESSION_STORE from api.state so all modules share
+# the same dict (previously utils.py defined its own copy, causing split-brain).
+from .state import SESSION_STORE  # noqa: F401  re-exported for backwards compat
+
 def patient_to_dict(p: PatientIntake | Dict[str, Any] | None) -> Dict[str, Any]:
     if p is None:
         return {}
@@ -29,9 +33,6 @@ def get_ip_address() -> str:
         return ip
     except Exception:
         return "127.0.0.1"
-
-# one global dict that all routers import
-SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 
 def ensure_session(thread_id: str) -> Dict[str, Any]:
     """

@@ -192,8 +192,13 @@ def node_extract(state: IntakeState) -> IntakeState:
 
     # 1) inline with context
     inline = infer_inline_updates(user_text, context_step)
+
+    # Special key: _yes_no → maps to returning_patient
+    if "_yes_no" in inline:
+        patient.returning_patient = inline.pop("_yes_no")
+
     for k, v in inline.items():
-        if v is not None:
+        if v is not None and hasattr(patient, k):
             setattr(patient, k, v)
 
     # 2) LLM extraction (for rich inputs)
@@ -209,6 +214,8 @@ def node_extract(state: IntakeState) -> IntakeState:
 
     # merge but don't overwrite existing non-empty values
     for k, v in data.items():
+        if not hasattr(patient, k):
+            continue
         if isinstance(v, str) and not v.strip():
             continue
         if getattr(patient, k, None) in (None, "", False):

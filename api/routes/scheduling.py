@@ -1,5 +1,5 @@
 # api/routes/scheduling.py
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from typing import Any, Dict, Optional, Tuple, List
 from datetime import datetime
@@ -8,6 +8,7 @@ import uuid
 import pandas as pd
 
 from ..state import SESSION_STORE
+from ..dependencies import get_current_user
 
 # Email + PDF
 from ..services.notify import send_confirmation_email
@@ -28,6 +29,149 @@ router = APIRouter()
 BOOKINGS_XLSX = Path("storage/bookings.xlsx")
 BOOKINGS_CSV  = Path("storage/bookings.csv")   # fallback if openpyxl missing
 CONFIRMATIONS_DIR = Path("storage/confirmations")
+
+
+# ---------- authenticated user-facing routes ----------
+
+
+@router.get("/appointments/me")
+def my_appointments(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return all appointments for the currently authenticated user,
+    most recent first.
+    """
+    from agents.db import SessionLocal
+    from agents.db_service import get_user_appointments
+    from agents.models import Doctor
+
+    user_id = current_user["user_id"]
+    db = SessionLocal()
+
+    try:
+        appts = get_user_appointments(db, user_id)
+
+        result = []
+        for a in appts:
+            # Fetch doctor name via relationship (already loaded by SQLAlchemy)
+            doctor_name = a.doctor.doctor_name if a.doctor else None
+
+            result.append({
+                "id":                      a.id,
+                "booking_uuid":            str(a.booking_uuid),
+                "doctor":                  doctor_name,
+                "appointment_date":        str(a.appointment_date),
+                "appointment_start":       str(a.appointment_start),
+                "appointment_end":         str(a.appointment_end),
+                "appointment_duration_min": a.appointment_duration_min,
+                "returning_patient":       a.returning_patient,
+                "problem":                 a.problem,
+                "problem_description":     a.problem_description,
+                "status":                  a.status,
+                "created_at":              a.created_at.isoformat()
+                                           if a.created_at else None,
+            })
+
+        return {"appointments": result, "total": len(result)}
+
+    finally:
+        db.close()
+
+
+@router.patch("/appointments/{appointment_id}/cancel")
+def cancel_appointment(
+    appointment_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Soft-cancel an appointment (sets status='cancelled').
+    Only the owning user may cancel their own appointment.
+    """
+    from agents.db import SessionLocal
+    from agents.db_service import (
+        get_appointment_by_id,
+        update_appointment_status,
+    )
+    from agents.models import DoctorAvailability
+
+    user_id = current_user["user_id"]
+    db = SessionLocal()
+
+    try:
+        appt = get_appointment_by_id(db, appointment_id)
+
+        if not appt:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Appointment not found.",
+            )
+
+        if appt.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only cancel your own appointments.",
+            )
+
+        if appt.status == "cancelled":
+            return {"ok": True, "message": "Appointment already cancelled."}
+
+        # Cancel appointment
+        update_appointment_status(db, appointment_id, "cancelled")
+
+        # Free the slot back up
+        slot = (
+            db.query(DoctorAvailability)
+            .filter(
+                DoctorAvailability.doctor_id == appt.doctor_id,
+                DoctorAvailability.available_date == appt.appointment_date,
+                DoctorAvailability.start_time == appt.appointment_start,
+            )
+            .first()
+        )
+        if slot:
+            slot.is_booked = False
+            db.commit()
+
+        return {
+            "ok": True,
+            "message": "Appointment cancelled successfully.",
+            "appointment_id": appointment_id,
+        }
+
+    finally:
+        db.close()
+
+
+@router.get("/doctors")
+def list_doctors():
+    """
+    Return all doctors — used by the frontend to populate the doctor picker.
+    No authentication required (public endpoint).
+    """
+    from agents.db import SessionLocal
+    from agents.db_service import get_all_doctors
+
+    db = SessionLocal()
+    try:
+        doctors = get_all_doctors(db)
+        return {
+            "doctors": [
+                {
+                    "id":             d.id,
+                    "name":           d.doctor_name,
+                    "specialty":      d.specialty,
+                    "location":       d.location,
+                    "slot_mins":      d.slot_mins,
+                    "hours_weekday":  d.hours_weekday,
+                    "hours_saturday": d.hours_saturday,
+                    "hours_sunday":   d.hours_sunday,
+                }
+                for d in doctors
+            ]
+        }
+    finally:
+        db.close()
 
 
 # ---------- helpers ----------
