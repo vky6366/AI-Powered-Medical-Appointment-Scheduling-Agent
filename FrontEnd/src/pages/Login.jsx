@@ -1,17 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { googleAuth } from '../api/services';
-
-const GOOGLE_CLIENT_ID = 'your_google_client_id'; // Replace with your actual Google Client ID if needed
+import { auth, googleProvider } from '../firebase';
+import { signInWithPopup } from 'firebase/auth';
 
 export default function Login() {
   const { login, token, profileComplete } = useAuth();
   const navigate = useNavigate();
-  const btnRef = useRef(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [scriptLoaded, setScriptLoaded] = useState(false);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -20,68 +18,24 @@ export default function Login() {
     }
   }, [token, profileComplete, navigate]);
 
-  // Load Google GIS script dynamically and initialize
-  useEffect(() => {
-    const initializeGoogleSignIn = () => {
-      if (!window.google) return;
-      try {
-        window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: handleGoogleResponse,
-        });
-        window.google.accounts.id.renderButton(btnRef.current, {
-          theme: 'outline',
-          size: 'large',
-          width: 370,
-          text: 'signin_with',
-          shape: 'rectangular',
-        });
-      } catch (err) {
-        console.error('Failed to initialize Google Sign-In:', err);
-      }
-    };
-
-    if (window.google) {
-      setScriptLoaded(true);
-      initializeGoogleSignIn();
-    } else {
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      script.onload = () => {
-        setScriptLoaded(true);
-        initializeGoogleSignIn();
-      };
-      document.body.appendChild(script);
-    }
-  }, [scriptLoaded]);
-
-  const handleGoogleResponse = async (response) => {
+  const handleGoogleLogin = async () => {
     setLoading(true);
     setError('');
     try {
-      const { data } = await googleAuth(response.credential);
+      // Sign in with Firebase popup
+      const result = await signInWithPopup(auth, googleProvider);
+      // Retrieve the Firebase ID Token
+      const firebaseIdToken = await result.user.getIdToken();
+      // Send token to the backend
+      const { data } = await googleAuth(firebaseIdToken);
       login(data.access_token, data.user, data.profile_complete);
       navigate(data.profile_complete ? '/dashboard' : '/complete-profile', { replace: true });
     } catch (err) {
-      setError(err.response?.data?.detail || 'Google login failed. Please try again.');
+      console.error(err);
+      setError(err.response?.data?.detail || err.message || 'Google login failed. Please try again.');
     } finally {
       setLoading(false);
     }
-  };
-
-  // Skip Login for Local Dev & Testing (Bypass Auth with Demo Mode)
-  const handleDemoLogin = () => {
-    const demoToken = 'demo-jwt-token-xyz';
-    const demoUser = {
-      id: 1,
-      name: 'John Doe',
-      email: 'john.doe@example.com',
-      profile_picture: null,
-      last_login: new Date().toISOString(),
-    };
-    login(demoToken, demoUser, true);
   };
 
   return (
@@ -169,29 +123,36 @@ export default function Login() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
-            {/* Real Google Auth Container */}
-            <div ref={btnRef} style={{ width: '100%', minHeight: 40 }} />
-
-            {/* Quick Demo Mode Bypass (Highly Requested for Dev/Testing) */}
+            {/* Custom Google Auth Button */}
             <button
-              onClick={handleDemoLogin}
+              onClick={handleGoogleLogin}
               style={{
                 width: '100%',
                 padding: '0.75rem',
                 borderRadius: 4,
-                background: 'linear-gradient(135deg, #0ea5e9, #6366f1)',
+                background: 'white',
                 border: 'none',
-                color: 'white',
+                color: '#1e293b',
                 fontWeight: 700,
                 cursor: 'pointer',
                 fontSize: '0.9rem',
-                boxShadow: '0 4px 14px rgba(14,165,233,0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+                boxShadow: '0 4px 14px rgba(255,255,255,0.1)',
                 transition: 'transform 0.1s ease, filter 0.2s',
               }}
-              onMouseOver={(e) => e.currentTarget.style.filter = 'brightness(1.1)'}
+              onMouseOver={(e) => e.currentTarget.style.filter = 'brightness(0.95)'}
               onMouseOut={(e) => e.currentTarget.style.filter = 'none'}
             >
-              🚀 Enter in Demo / Dev Mode
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.92h6.69c-.29 1.5-1.14 2.78-2.4 3.63v3.02h3.88c2.27-2.09 3.57-5.17 3.57-8.5z"/>
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.02c-1.08.72-2.45 1.16-4.05 1.16-3.11 0-5.74-2.11-6.68-4.96H1.21v3.11C3.18 21.88 7.31 24 12 24z"/>
+                <path fill="#FBBC05" d="M5.32 14.27c-.24-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.62H1.21C.44 8.24 0 10.06 0 12s.44 3.76 1.21 5.38l4.11-3.11z"/>
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.18 2.12 1.21 5.38l4.11 3.11c.94-2.85 3.57-4.96 6.68-4.96z"/>
+              </svg>
+              Sign in with Google
             </button>
           </div>
         )}
