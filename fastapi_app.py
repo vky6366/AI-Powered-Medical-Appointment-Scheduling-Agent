@@ -129,7 +129,7 @@ app = FastAPI(
 #   Wide-open CORS is fine for local development only.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # DEV ONLY — tighten before deploying
+    allow_origins=["http://medical-ai-frontend.s3-website.ap-south-1.amazonaws.com/"],  # DEV ONLY — tighten before deploying
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

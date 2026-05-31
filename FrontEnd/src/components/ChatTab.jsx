@@ -20,6 +20,17 @@ export default function ChatTab() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  const formatMessage = (text) => {
+    if (typeof text !== 'string') return text;
+    if (text.includes('Available slots for')) {
+      const match = text.match(/Available slots for\s+([\s\S]+?)\s+on\s+[^:]+:/i);
+      if (match) {
+        return `Available slots for ${match[1].trim()}:`;
+      }
+    }
+    return text;
+  };
+
   const send = async (msgText, slotId = null) => {
     if (!msgText.trim() && !slotId) return;
     const userMsg = msgText.trim() || `Booking slot ${slotId}`;
@@ -77,7 +88,7 @@ export default function ChatTab() {
                   : 'rgba(255,255,255,0.07)',
                 color: 'white', fontSize: '0.9rem', lineHeight: 1.5,
               }}>
-                {msg.text}
+                {formatMessage(msg.text)}
               </div>
             )}
           </div>
@@ -93,17 +104,29 @@ export default function ChatTab() {
               Available Slots — pick one:
             </p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {availableSlots.map((slot) => (
-                <button key={slot.slot_id} onClick={() => send(`I'll take slot ${slot.slot_id}`, slot.slot_id)} style={{
-                  padding: '0.5rem 0.875rem', borderRadius: 8,
-                  background: 'rgba(14,165,233,0.15)', border: '1px solid rgba(14,165,233,0.4)',
-                  color: '#38bdf8', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-                }}>
-                  {new Date(slot.start).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                  {' · '}
-                  {new Date(slot.start).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                </button>
-              ))}
+              {availableSlots.map((slot) => {
+                const lastBotMsg = [...messages].reverse().find(msg => msg.role === 'bot' && msg.data?.appointment_date);
+                const appointmentDate = lastBotMsg?.data?.appointment_date || new Date().toISOString().split('T')[0];
+                const startStr = slot.start.includes('T') ? slot.start : `${appointmentDate}T${slot.start}`;
+                const startDateTime = new Date(startStr);
+                const isValidDate = !isNaN(startDateTime.getTime());
+                const dateLabel = isValidDate 
+                  ? startDateTime.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                  : '';
+                const timeLabel = isValidDate
+                  ? startDateTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+                  : slot.start;
+
+                return (
+                  <button key={slot.slot_id} onClick={() => send(`I'll take slot ${slot.slot_id}`, slot.slot_id)} style={{
+                    padding: '0.5rem 0.875rem', borderRadius: 8,
+                    background: 'rgba(14,165,233,0.15)', border: '1px solid rgba(14,165,233,0.4)',
+                    color: '#38bdf8', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+                  }}>
+                    {dateLabel ? `${dateLabel} · ` : ''}{timeLabel}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

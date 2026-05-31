@@ -173,7 +173,6 @@ def node_ensure_date(
             f"Your appointment duration will be "
             f"{mins} minutes.\n"
             f"Which date works for you? "
-            f"(YYYY-MM-DD)"
         )
 
         state["next_step"] = "ask_date"
